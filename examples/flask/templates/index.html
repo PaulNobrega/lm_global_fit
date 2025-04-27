@@ -1,0 +1,943 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GlobalFit Python Fitter (Flask)</title> <!-- Changed Title -->
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <!-- Basic Styles -->
+    <style>
+        body { font-family: sans-serif; padding-top: 20px; padding-bottom: 50px;}
+        .dataset-block { border: 1px solid #ccc; padding: 15px; margin-bottom: 15px; border-radius: 5px; background-color: #f9f9f9; }
+        .model-selection { display: flex; gap: 5px; align-items: center; margin-bottom: 5px; }
+        .model-selection select { flex-grow: 1; margin-right: 5px; }
+        .chart-container { position: relative; height: 350px; width: 100%; max-width: 700px; margin-bottom: 20px; border: 1px solid #ccc; }
+        #results-display { max-height: 300px; overflow-y: auto; background-color: #eee; padding: 10px; border: 1px solid #ccc; font-family: monospace; font-size: 0.9em; white-space: pre-wrap; word-wrap: break-word; }
+        .fitting-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(255, 255, 255, 0.7); display: none; justify-content: center; align-items: center; z-index: 1050; }
+        #fit-params-container { max-height: 300px; overflow-y: auto; }
+        #param-table input[type="number"], #param-table input[type="text"] { width: 100px; }
+        #param-table td input[type="checkbox"].form-check-input {
+            appearance: checkbox !important; -webkit-appearance: checkbox !important; -moz-appearance: checkbox !important;
+            width: 1em !important; height: 1em !important; margin: auto !important;
+            vertical-align: middle; position: relative; top: 0; left: 0;
+        }
+        .log-entry { margin-bottom: 3px; padding-bottom: 3px; border-bottom: 1px dotted #ddd; }
+        .log-entry:last-child { border-bottom: none; }
+        table { border-collapse: collapse; margin-top: 10px; width: 100%;}
+        th, td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; vertical-align: middle;}
+        th { background-color: #f2f2f2;}
+        /* Style for range inputs */
+        .range-input-group { display: flex; gap: 5px; align-items: center; }
+        .range-input-group input { width: 80px !important; }
+    </style>
+</head>
+<body>
+    <!-- Loading Overlay -->
+    <div id="fitting-overlay" class="fitting-overlay">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Processing...</span> <!-- Changed text -->
+        </div>
+        <strong id="overlay-text" class="ms-2">Processing, please wait...</strong> <!-- Dynamic text -->
+    </div>
+
+    <!-- Info Modal (Content remains the same, just update title if needed) -->
+    <div class="modal fade" id="infoModal" tabindex="-1" aria-labelledby="infoModalLabel" aria-hidden="true">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h1 class="modal-title fs-5" id="infoModalLabel">How to Use the Global Fitter (Python Backend)</h1>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <!-- Help text updated for new linkMap format -->
+            <h5>1. Define Datasets & Models</h5>
+            <ul>
+              <li>Click "Add Dataset" to create up to 20 independent data series.</li>
+              <li>For each dataset, specify the number of points (5-100) and the X-axis range (Min/Max) for *simulation*.</li>
+              <li>**NEW:** Optionally specify a "Plot/Fit X Range" (Min/Max) for calculating/plotting the fitted model and confidence intervals. Leave blank to use the range determined by the simulated data. This allows extrapolation.</li>
+              <li>Use the dropdowns to select up to 3 model components (e.g., Gaussian, Linear, Constant) for each dataset. The final model for a dataset is the *sum* of its selected components.</li>
+              <li>Use the "+ Add Model" button within a dataset to add more components (up to 3). Use the 'X' button to remove a model component (the first cannot be removed).</li>
+              <li>Click the "Remove" button on a dataset block to delete it.</li>
+            </ul>
+            <h5>2. Define Parameters</h5>
+            <ul>
+              <li>The parameter table updates automatically based on the models selected.</li>
+              <li>Each row represents a single parameter value within a specific model component of a specific dataset.</li>
+              <li><strong>Coord:</strong> Shows the internal coordinate `[Dataset Index, Model Group Index, Parameter Index In Group]` (all 0-based).</li>
+              <li><strong>Initial Value:</strong> Enter your best guess for the starting value of each parameter.</li>
+              <li><strong>Fix:</strong> Check this box to *prevent* the fitting algorithm from changing this specific parameter's value.</li>
+              <li><strong>Link ID:</strong> To make multiple parameters share the *same fitted value*, enter the **exact same text** (e.g., "shared_amp", "link1") into the "Link ID" field for all parameters you want to link together. Leave blank or `null` for independent parameters. The underlying `linkMap` passed to the fitter will be a nested array mirroring the parameter structure, containing these IDs or `null`.</li>
+              <li><em>Important:</em> If linking parameters, ensure their initial values are consistent *before simulating* if you want the simulation to accurately reflect the linked state.</li>
+            </ul>
+             <h5>3. Simulate Data</h5>
+            <ul>
+              <li>Set the desired standard deviation for the Gaussian noise added to the 'true' model values.</li>
+              <li>Click "Simulate Data". This sends the models and parameters to the Python backend for simulation. The plots will update with the returned data.</li>
+            </ul>
+             <h5>4. Fit Data</h5>
+            <ul>
+              <li>Adjust the fitting tolerance and maximum iterations if needed.</li>
+              <li>**Optional:** Enter a Confidence Interval level (e.g., 0.95 for 95%) to calculate and plot CI bands for the fitted curves. Leave blank or invalid to skip.</li>
+              <li>Click "Run Fit". This sends the simulated data, models, parameters, and options (including Fix/Link maps and Plot/Fit X Range) to the Python backend. The `lm_fit_global` algorithm will run. A loading indicator will show while fitting.</li>
+            </ul>
+             <h5>5. Results</h5>
+            <ul>
+              <li><strong>Fit Output & Stats:</strong> Shows logs and statistics returned from the Python backend.</li>
+              <li><strong>Fitted Parameters (Active):</strong> Lists the final optimized values and estimated standard errors returned from the Python backend.</li>
+              <li>The plots update to show the fitted model line(s) (and CI bands if calculated) and the residuals ((data-fit)/error).</li>
+            </ul>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- End Info Modal -->
+
+
+    <div class="container">
+        <div class="d-flex justify-content-between align-items-center">
+             <h1>GlobalFit Python Fitter (Flask)</h1> <!-- Changed Title -->
+             <button class="btn btn-outline-info btn-sm" id="show-info-btn" title="Show Usage Info">
+                 <i class="bi bi-info-circle-fill"></i> Help
+             </button>
+        </div>
+        <hr>
+
+        <!-- Datasets and Models Definition -->
+        <h2>1. Define Datasets & Models</h2>
+        <div id="datasets-container"></div>
+        <button id="add-dataset-btn" class="btn btn-success btn-sm mb-3">Add Dataset</button>
+        <hr>
+        <!-- Parameters Definition -->
+        <h2>2. Define Parameters</h2>
+        <p>Define initial values. Check "Fix" to prevent fitting. Enter the same non-empty "Link ID" for parameters you want to share the same value.</p>
+        <div id="parameters-container" class="table-responsive">
+             <table class="table table-sm table-bordered" id="param-table">
+                <thead><tr><th>Dataset</th><th>Model Index</th><th>Param Index</th><th>Coord</th><th>Initial Value</th><th>Fix</th><th>Link ID</th></tr></thead>
+                <tbody id="param-table-body"><tr><td colspan="7" class="text-center"><i>Define datasets and models first.</i></td></tr></tbody>
+            </table>
+        </div>
+        <hr>
+        <!-- Simulation Controls -->
+        <h2>3. Simulate Data</h2>
+        <div class="row g-3 align-items-center mb-3">
+            <div class="col-auto"><label for="noise-level" class="col-form-label">Noise Std Dev (ye):</label></div>
+            <div class="col-auto"><input type="number" id="noise-level" class="form-control form-control-sm" value="0.5" step="0.1" min="0"></div>
+            <div class="col-auto"><button id="simulate-btn" class="btn btn-primary">Simulate Data</button></div>
+        </div>
+        <hr>
+         <!-- Fitting Controls -->
+        <h2>4. Fit Data</h2>
+         <div class="row g-3 align-items-center mb-3">
+             <div class="col-auto"><label for="fit-tolerance" class="col-form-label">Tolerance:</label></div>
+             <div class="col-auto"><input type="number" id="fit-tolerance" class="form-control form-control-sm" value="1e-6" step="1e-7" min="1e-10"></div>
+             <div class="col-auto"><label for="fit-max-iter" class="col-form-label">Max Iter:</label></div>
+             <div class="col-auto"><input type="number" id="fit-max-iter" class="form-control form-control-sm" value="100" step="10" min="10"></div>
+             <div class="col-auto"><label for="fit-confidence-level" class="col-form-label">Conf. Interval (0-1):</label></div>
+             <div class="col-auto"><input type="number" id="fit-confidence-level" class="form-control form-control-sm" value="0.95" step="0.01" min="0" max="1" placeholder="e.g., 0.95"></div>
+             <div class="col-auto"><label for="fit-cov-lambda" class="col-form-label" title="Regularization for Covariance Matrix Inversion">Cov. Lambda:</label></div>
+             <div class="col-auto"><input type="number" id="fit-cov-lambda" class="form-control form-control-sm" value="1e-9" step="1e-9" min="0" placeholder="e.g., 1e-9"></div>
+             <div class="col-auto form-check form-switch" title="Fallback to slower Bootstrap CI if standard method has issues">
+                 <input class="form-check-input" type="checkbox" role="switch" id="fit-bootstrap-fallback" checked>
+                 <label class="form-check-label" for="fit-bootstrap-fallback">Bootstrap Fallback</label>
+             </div>
+             <div class="col-auto">
+                 <label for="fit-bootstrap-samples" class="col-form-label" title="Number of samples for Bootstrap Fallback">BS Samples:</label>
+             </div>
+             <div class="col-auto">
+                 <input type="number" id="fit-bootstrap-samples" class="form-control form-control-sm" value="200" step="50" min="10">
+             </div>
+             <div class="col-auto form-check form-switch" title="Calculate and return individual model component curves">
+                 <input class="form-check-input" type="checkbox" role="switch" id="fit-component-curves">
+                 <label class="form-check-label" for="fit-component-curves">Component Curves</label>
+             </div>
+             <div class="col-auto"><button id="fit-btn" class="btn btn-warning">Run Fit</button></div>
+         </div>
+        <hr>
+        <!-- Results -->
+        <h2>5. Results</h2>
+        <div class="row">
+            <div class="col-md-6"><h3>Fit Output & Stats</h3><div id="results-display"><i>Fit results will appear here...</i></div></div>
+            <div class="col-md-6"><h3>Fitted Parameters (Active)</h3><div id="fit-params-container" class="table-responsive"><table class="table table-sm table-bordered" id="fit-params-table"><thead><tr><th>Label</th><th>Value</th><th>Std Error</th></tr></thead><tbody id="fit-params-body"><tr><td colspan="3" class="text-center"><i>Run fit first.</i></td></tr></tbody></table></div></div>
+        </div>
+        <hr>
+        <!-- Plotting -->
+        <h2>6. Plots</h2>
+        <div class="row">
+            <div class="col-12">
+                <h3>Data and Combined Fit</h3>
+                <div class="chart-container">
+                    <canvas id="dataFitChart"></canvas>
+                </div>
+                <h3>Data and Component Fits</h3>
+                <div class="chart-container">
+                    <canvas id="componentFitChart"></canvas>
+                </div>
+                <h3>Fit Residuals</h3>
+                <div class="chart-container">
+                    <canvas id="residualsChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div> <!-- /container -->
+
+    <!-- External Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-C6RzsynM9kWDrMNeT87bh95OGNyZPhcTNXj1NW7RuBCsyN/o0jlpcV8Qyq46cDfL" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+    <!-- REMOVED JS fitter library includes -->
+    <!-- <script src="svd.js"></script> -->
+    <!-- <script src="globalfit.js"></script> -->
+
+    <!-- UI Interaction Logic -->
+    <script>
+        // ============================================================================
+        // UI Logic and Simulation/Fitting Calls to Flask Backend
+        // ============================================================================
+
+        // --- Debounce Utility ---
+        function debounce(func, wait) { let timeout; return function executedFunction(...args) { const context = this; const later = function() { timeout = null; func.apply(context, args); }; clearTimeout(timeout); timeout = setTimeout(later, wait); }; }
+
+        // --- Model Definitions (Client-side for UI generation ONLY) ---
+        // The actual calculation happens in Python now.
+        const availableModels = {
+            gaussian: { name: "Gaussian (A, xc, w)", params: 3 },
+            linear: { name: "Linear (m*x)", params: 1 }, // <-- CHANGED: name and params=1
+            constant: { name: "Constant (c)", params: 1 },
+            exponential: { name: "Exponential (A*exp(-rate*x))", params: 2 }
+        };
+
+        // --- Global State ---
+        let datasetCount = 0;
+        let simulatedData = null; // Will store { x: [[]], y: [[]], ye: [[]] } from Flask
+        let fitResultData = null; // Will store the result object from Flask
+        let dataFitChart = null;
+        let residualsChart = null;
+        let componentFitChart = null;
+
+        // --- UI Element References ---
+        const datasetsContainer = document.getElementById('datasets-container');
+        const addDatasetBtn = document.getElementById('add-dataset-btn');
+        const paramTableBody = document.getElementById('param-table-body');
+        const simulateBtn = document.getElementById('simulate-btn');
+        const fitBtn = document.getElementById('fit-btn');
+        const resultsDisplay = document.getElementById('results-display');
+        const fitParamsBody = document.getElementById('fit-params-body');
+        const dataFitCanvas = document.getElementById('dataFitChart');
+        const residualsCanvas = document.getElementById('residualsChart');
+        const componentFitCanvas = document.getElementById('componentFitChart');
+        const fittingOverlay = document.getElementById('fitting-overlay');
+        const overlayText = document.getElementById('overlay-text'); // For dynamic text
+        const infoBtn = document.getElementById('show-info-btn');
+        const ciLevelInput = document.getElementById('fit-confidence-level');
+        const covLambdaInput = document.getElementById('fit-cov-lambda');
+        const bootstrapFallbackInput = document.getElementById('fit-bootstrap-fallback');
+        const bootstrapSamplesInput = document.getElementById('fit-bootstrap-samples');
+        const componentCurvesInput = document.getElementById('fit-component-curves');
+        let infoModal = null;
+
+        // --- Helper Functions ---
+        function generateModelOptions() { let optionsHtml = '<option value="">-- Select Model --</option>'; for (const key in availableModels) optionsHtml += `<option value="${key}">${availableModels[key].name}</option>`; return optionsHtml; }
+        const debouncedGenerateParameterUI = debounce(generateParameterUI, 300);
+
+        // --- UI Building Functions ---
+        function addDatasetBlock(dsIndex) {
+            datasetCount++;
+            const blockId = `dataset-${dsIndex}`;
+            const block = document.createElement('div');
+            block.className = 'dataset-block';
+            block.id = blockId;
+            // --- REVIEWED/CORRECTED INNER HTML ---
+            block.innerHTML = `
+                <h5>Dataset ${dsIndex} <button class="btn btn-danger btn-sm float-end remove-dataset-btn" data-dsindex="${dsIndex}">Remove</button></h5>
+                <div class="row g-2 mb-2 align-items-end">
+                    <div class="col-md-2 col-6">
+                        <label for="${blockId}-npts" class="form-label form-label-sm">Num Points:</label>
+                        <input type="number" class="form-control form-control-sm dataset-input" id="${blockId}-npts" value="50" min="5" max="1000">
+                    </div>
+                    <div class="col-md-2 col-6">
+                        <label for="${blockId}-xmin" class="form-label form-label-sm">Sim X Min:</label>
+                        <input type="number" class="form-control form-control-sm dataset-input" id="${blockId}-xmin" value="0" step="any">
+                    </div>
+                    <div class="col-md-2 col-6">
+                        <label for="${blockId}-xmax" class="form-label form-label-sm">Sim X Max:</label>
+                        <input type="number" class="form-control form-control-sm dataset-input" id="${blockId}-xmax" value="10" step="any">
+                    </div>
+                    <!-- Plot/Fit X Range Inputs -->
+                    <div class="col-md-4 col-12"> <!-- Use col-md-4 for medium screens and up, col-12 for small -->
+                        <label for="${blockId}-plotxmin" class="form-label form-label-sm">Plot/Fit X Range (Optional):</label> <!-- Label points to first input -->
+                        <div class="input-group input-group-sm">
+                            <input type="number" class="form-control form-control-sm dataset-input plot-range-input" id="${blockId}-plotxmin" placeholder="Min" step="any" aria-label="Plot X Min">
+                            <span class="input-group-text">-</span>
+                            <input type="number" class="form-control form-control-sm dataset-input plot-range-input" id="${blockId}-plotxmax" placeholder="Max" step="any" aria-label="Plot X Max">
+                        </div>
+                    </div>
+                    <!-- End Plot/Fit X Range Inputs -->
+                </div>
+                <h6>Models (up to 3):</h6>
+                <div id="${blockId}-models">
+                    <div class="model-selection mb-2">
+                        <select class="form-select form-select-sm model-select" data-dsindex="${dsIndex}" data-modindex="0">
+                            ${generateModelOptions()}
+                        </select>
+                        <button class="btn btn-outline-secondary btn-sm remove-model-btn" disabled>X</button>
+                    </div>
+                </div>
+                <button class="btn btn-outline-success btn-sm add-model-btn" data-dsindex="${dsIndex}">+ Add Model</button>`;
+            // --- END REVIEWED/CORRECTED INNER HTML ---
+            datasetsContainer.appendChild(block);
+            // Add event listeners (no change needed here)
+            block.querySelector('.remove-dataset-btn').addEventListener('click', removeDatasetBlock);
+            block.querySelector('.add-model-btn').addEventListener('click', addModelSelection);
+            block.querySelectorAll('.model-select').forEach(sel => sel.addEventListener('change', debouncedGenerateParameterUI));
+            block.querySelectorAll('.dataset-input').forEach(inp => inp.addEventListener('change', debouncedGenerateParameterUI));
+            block.querySelector('.remove-model-btn').addEventListener('click', removeModelSelection);
+            // generateParameterUI(); // Still keep this commented out here
+        }
+
+        function removeDatasetBlock(event) { const dsIndex = event.target.dataset.dsindex; const block = document.getElementById(`dataset-${dsIndex}`); if (block) { block.remove(); debouncedGenerateParameterUI(); } }
+        function addModelSelection(event) { const dsIndex = event.target.dataset.dsindex; const modelsDiv = document.getElementById(`dataset-${dsIndex}-models`); const modelCount = modelsDiv.querySelectorAll('.model-selection').length; if (modelCount < 3) { const modIndex = modelCount; const newSelection = document.createElement('div'); newSelection.className = 'model-selection mb-2'; newSelection.innerHTML = `<select class="form-select form-select-sm model-select" data-dsindex="${dsIndex}" data-modindex="${modIndex}"> ${generateModelOptions()} </select> <button class="btn btn-outline-danger btn-sm remove-model-btn">X</button>`; modelsDiv.appendChild(newSelection); newSelection.querySelector('.model-select').addEventListener('change', debouncedGenerateParameterUI); newSelection.querySelector('.remove-model-btn').addEventListener('click', removeModelSelection); if (modelsDiv.querySelectorAll('.model-selection').length >= 3) event.target.disabled = true; debouncedGenerateParameterUI(); } }
+        function removeModelSelection(event) { const selectionDiv = event.target.closest('.model-selection'); const modelsDiv = selectionDiv.parentElement; const dsIndex = modelsDiv.id.split('-')[1]; if (selectionDiv) { selectionDiv.remove(); document.querySelector(`#dataset-${dsIndex} .add-model-btn`).disabled = false; debouncedGenerateParameterUI(); } }
+
+        function generateParameterUI() {
+            const oldValues = new Map();
+            const oldFixState = new Map();
+            const oldLinkState = new Map();
+            paramTableBody.querySelectorAll('input.param-input').forEach(inp => { if (inp.dataset.coord) oldValues.set(inp.dataset.coord, inp.value); });
+            paramTableBody.querySelectorAll('input.fix-checkbox').forEach(cb => { if (cb.dataset.coord) oldFixState.set(cb.dataset.coord, cb.checked); });
+            paramTableBody.querySelectorAll('input.link-input').forEach(inp => { if (inp.dataset.coord) oldLinkState.set(inp.dataset.coord, inp.value); });
+
+            paramTableBody.innerHTML = '';
+            let hasParams = false;
+            let currentDsIndices = new Set();
+            datasetsContainer.querySelectorAll('.dataset-block').forEach(block => currentDsIndices.add(parseInt(block.id.split('-')[1])));
+            const sortedDsIndices = Array.from(currentDsIndices).sort((a, b) => a - b);
+
+            sortedDsIndices.forEach((dsIndexUI, filteredDsIndex) => { // Use filteredDsIndex for internal structure
+                const block = document.getElementById(`dataset-${dsIndexUI}`);
+                if (!block) return;
+                let paramGroupIndex = 0; // This corresponds to the model index within the dataset
+                block.querySelectorAll('.model-select').forEach(select => {
+                    const modelKey = select.value;
+                    if (modelKey && availableModels[modelKey]) {
+                        hasParams = true;
+                        const modelInfo = availableModels[modelKey];
+                        const numParams = modelInfo.params;
+                        for (let pIdx = 0; pIdx < numParams; pIdx++) {
+                            // Use filteredDsIndex for the structure sent to Python
+                            const coordPythonStr = `[[${filteredDsIndex}, ${paramGroupIndex}], ${pIdx}]`;
+                            // Use dsIndexUI for display and finding elements
+                            const coordUIStr = `[[${dsIndexUI}, ${paramGroupIndex}], ${pIdx}]`;
+                            const coordDisplayStr = `[${dsIndexUI}, ${paramGroupIndex}, ${pIdx}]`;
+
+                            const row = paramTableBody.insertRow();
+                            const prevValue = oldValues.get(coordUIStr) ?? getDefaultParamValue(modelKey, pIdx);
+                            const isChecked = oldFixState.get(coordUIStr) || false;
+                            const checkedAttr = isChecked ? 'checked' : '';
+                            const linkValue = oldLinkState.get(coordUIStr) || '';
+
+                            row.innerHTML = `
+                                <td>${dsIndexUI}</td>
+                                <td>${paramGroupIndex} (${modelKey})</td>
+                                <td>${pIdx}</td>
+                                <td><small>${coordDisplayStr}</small></td>
+                                <td><input type="number" class="form-control form-control-sm param-input" data-coord='${coordUIStr}' value="${prevValue}" step="any"></td>
+                                <td class="text-center align-middle">
+                                    <input class="form-check-input fix-checkbox" type="checkbox" data-coord='${coordUIStr}' ${checkedAttr} style="margin: auto;">
+                                </td>
+                                <td><input type="text" class="form-control form-control-sm link-input" data-coord='${coordUIStr}' value="${linkValue}"></td>`;
+                        }
+                        paramGroupIndex++;
+                    }
+                });
+            });
+
+            if (!hasParams) {
+                paramTableBody.innerHTML = '<tr><td colspan="7" class="text-center"><i>Define datasets and models first.</i></td></tr>';
+            }
+        }
+        function getDefaultParamValue(modelKey, pIdx) {
+            if (modelKey === 'gaussian') return [10, 5, 1][pIdx];
+            if (modelKey === 'linear') return 1; // Slope default = 1
+            if (modelKey === 'constant') return 0;
+            if (modelKey === 'exponential') return [10, 1][pIdx]; // A, rate
+            return 1;
+        }
+
+        // --- Simulation & Fitting (Modified for Flask) ---
+        function gatherFitInputs(validate = true) {
+            const initialParamsStructure = [];
+            const modelKeysStructure = [];
+            const fixMapStructure = [];
+            const finalLinkMap = [];
+            const modelXRange = []; // <-- Initialize array for ranges
+    
+            const sortedDsIndices = Array.from(datasetsContainer.querySelectorAll('.dataset-block'))
+                                        .map(block => parseInt(block.id.split('-')[1]))
+                                        .sort((a, b) => a - b);
+            let errorMsg = null;
+    
+            sortedDsIndices.forEach((dsIndexUI, filteredDsIndex) => {
+                const block = document.getElementById(`dataset-${dsIndexUI}`);
+                if (!block) return;
+    
+                initialParamsStructure[filteredDsIndex] = [];
+                modelKeysStructure[filteredDsIndex] = [];
+                fixMapStructure[filteredDsIndex] = [];
+                finalLinkMap[filteredDsIndex] = [];
+    
+                let paramGroupIndex = 0;
+                let datasetHasModels = false;
+                block.querySelectorAll('.model-select').forEach(select => {
+                    const modelKey = select.value;
+                    if (modelKey && availableModels[modelKey]) {
+                        datasetHasModels = true;
+                        const modelInfo = availableModels[modelKey];
+                        const currentParamGroup = [];
+                        const currentFixMapGroup = [];
+                        const currentLinkMapGroup = [];
+    
+                        for (let pIdx = 0; pIdx < modelInfo.params; pIdx++) {
+                            const coordUIStr = `[[${dsIndexUI}, ${paramGroupIndex}], ${pIdx}]`;
+                            const valueInput = document.querySelector(`input.param-input[data-coord='${coordUIStr}']`);
+                            const fixInput = document.querySelector(`input.fix-checkbox[data-coord='${coordUIStr}']`);
+                            const linkInput = document.querySelector(`input.link-input[data-coord='${coordUIStr}']`);
+    
+                            if (!valueInput) { errorMsg = errorMsg || `Param input missing: ${coordUIStr}`; continue; }
+                            const value = parseFloat(valueInput.value);
+                            if (validate && isNaN(value)) { errorMsg = errorMsg || `Invalid value: ${coordUIStr}`; }
+                            currentParamGroup.push(value);
+                            currentFixMapGroup.push(fixInput ? fixInput.checked : false);
+                            let linkIdValue = null;
+                            if (linkInput) { const linkId = linkInput.value.trim(); if (linkId) { linkIdValue = linkId; } }
+                            currentLinkMapGroup.push(linkIdValue);
+                        }
+                        initialParamsStructure[filteredDsIndex].push(currentParamGroup);
+                        fixMapStructure[filteredDsIndex].push(currentFixMapGroup);
+                        finalLinkMap[filteredDsIndex].push(currentLinkMapGroup);
+                        modelKeysStructure[filteredDsIndex].push(modelKey);
+                        paramGroupIndex++;
+                    }
+                });
+    
+                // --- Gather model_x_range ---
+                const plotXMinInput = document.getElementById(`dataset-${dsIndexUI}-plotxmin`);
+                const plotXMaxInput = document.getElementById(`dataset-${dsIndexUI}-plotxmax`);
+                let currentRange = null; // Default to null (use data range)
+                if (plotXMinInput && plotXMaxInput) {
+                    const minValStr = plotXMinInput.value.trim();
+                    const maxValStr = plotXMaxInput.value.trim();
+                    // Only create range tuple if BOTH are valid numbers and min <= max
+                    if (minValStr !== "" && maxValStr !== "") {
+                        const minVal = parseFloat(minValStr);
+                        const maxVal = parseFloat(maxValStr);
+                        if (!isNaN(minVal) && !isNaN(maxVal) && minVal <= maxVal) {
+                            currentRange = [minVal, maxVal];
+                        } else if (validate) {
+                            errorMsg = errorMsg || `Invalid Plot/Fit X Range for Dataset ${dsIndexUI}. Min must be <= Max.`;
+                        }
+                    } else if (minValStr !== "" || maxValStr !== "") {
+                         if (validate) errorMsg = errorMsg || `Both Min and Max must be provided (or both left blank) for Plot/Fit X Range for Dataset ${dsIndexUI}.`;
+                    }
+                }
+                modelXRange.push(currentRange); // Add null if not specified or invalid
+                // --- End gather model_x_range ---
+    
+                if (!datasetHasModels) {
+                    // Remove empty entries if a dataset block has no models selected
+                    initialParamsStructure.pop();
+                    modelKeysStructure.pop();
+                    fixMapStructure.pop();
+                    finalLinkMap.pop();
+                    modelXRange.pop(); // Also remove range entry
+                }
+            });
+    
+            if (validate && errorMsg) {
+                throw new Error(errorMsg);
+            }
+    
+            // Filter out undefined entries just in case
+            const finalInitialParams = initialParamsStructure.filter(el => el !== undefined);
+            const finalModelKeys = modelKeysStructure.filter(el => el !== undefined);
+            const finalFixMap = fixMapStructure.filter(el => el !== undefined);
+            const finalLinkMapStructure = finalLinkMap.filter(el => el !== undefined);
+            const finalModelXRange = modelXRange; // No need to filter nulls here
+    
+            return {
+                initialParamsStructure: finalInitialParams,
+                modelKeysStructure: finalModelKeys,
+                fixMapStructure: finalFixMap,
+                linkMap: finalLinkMapStructure,
+                modelXRange: finalModelXRange // Return the list (can contain nulls)
+            };
+        }
+
+        // *** NEW simulateData function using Flask backend ***
+        async function simulateData() {
+            console.log("Requesting simulation from Flask backend...");
+            resultsDisplay.textContent = "Requesting simulation...";
+            fitParamsBody.innerHTML = '<tr><td colspan="3" class="text-center"><i>Simulate first.</i></td></tr>';
+            simulatedData = null; fitResultData = null; updatePlots();
+            fittingOverlay.style.display = 'flex';
+            overlayText.textContent = "Simulating data...";
+
+            try {
+                // 1. Gather Models and Initial Parameters (including linked ones)
+                const { initialParamsStructure, modelKeysStructure } = gatherFitInputs(true); // Validate inputs
+                if (initialParamsStructure.length === 0) throw new Error("No valid datasets/models defined.");
+
+                // 2. Generate dataX structure from UI settings
+                const dataX = [];
+                const datasetConfigsForNoise = []; // Store num points per dataset
+                const sortedDsIndices = Array.from(datasetsContainer.querySelectorAll('.dataset-block'))
+                                            .map(block => parseInt(block.id.split('-')[1]))
+                                            .sort((a, b) => a - b);
+
+                sortedDsIndices.forEach((dsIndexUI, filteredDsIndex) => {
+                    // Ensure we only process datasets that were included in gatherFitInputs
+                    if (filteredDsIndex >= initialParamsStructure.length) return;
+                    const block = document.getElementById(`dataset-${dsIndexUI}`);
+                    if (!block) return;
+                    const npts = parseInt(document.getElementById(`dataset-${dsIndexUI}-npts`).value);
+                    const xmin = parseFloat(document.getElementById(`dataset-${dsIndexUI}-xmin`).value);
+                    const xmax = parseFloat(document.getElementById(`dataset-${dsIndexUI}-xmax`).value);
+                    if (isNaN(npts) || npts <= 0 || isNaN(xmin) || isNaN(xmax) || (npts > 1 && xmax <= xmin)) {
+                        throw new Error(`Invalid simulation range/points for Dataset ${dsIndexUI}.`);
+                    }
+                    const currentX = [];
+                    const dx = (npts === 1 || xmax === xmin) ? 0 : (xmax - xmin) / (npts - 1);
+                    for (let i = 0; i < npts; i++) currentX.push(xmin + i * dx);
+                    dataX.push(currentX);
+                    datasetConfigsForNoise.push({ numPoints: npts });
+                });
+
+                // 3. Prepare Noise Options
+                const noiseStdDevInput = document.getElementById('noise-level');
+                const noiseValue = parseFloat(noiseStdDevInput.value);
+                let noiseStdDevOption = null;
+                let noiseTypeOption = 'none';
+                if (!isNaN(noiseValue) && noiseValue > 0) {
+                    noiseStdDevOption = noiseValue; // Send single value, Python handles distribution
+                    noiseTypeOption = 'gaussian';
+                }
+
+                const simOptions = {
+                    noiseStdDev: noiseStdDevOption,
+                    noiseType: noiseTypeOption
+                };
+
+                // 4. Prepare Payload for Flask
+                const payload = {
+                    data_x: dataX,
+                    model_keys: modelKeysStructure, // Send keys
+                    parameters: initialParamsStructure, // Send initial params
+                    options: simOptions
+                };
+
+                // 5. Call Flask Endpoint
+                const response = await fetch('/simulate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ error: `HTTP error ${response.status}` }));
+                    throw new Error(errorData.error || `Simulation request failed with status ${response.status}`);
+                }
+
+                const simulationResult = await response.json();
+
+                if (simulationResult.error) {
+                    throw new Error(`Simulation Error from Backend: ${simulationResult.error}`);
+                }
+
+                // 6. Generate 'ye' array based on noise settings used
+                const simulatedYE = [];
+                datasetConfigsForNoise.forEach((config, dsIdx) => {
+                    let yeValue = 1.0; // Default error
+                    if (simOptions.noiseType === 'gaussian' && simOptions.noiseStdDev > 0) {
+                        yeValue = simOptions.noiseStdDev;
+                    }
+                    // Note: Python backend doesn't return Poisson errors, so we use 1.0
+                    simulatedYE.push(new Array(config.numPoints).fill(Math.max(1e-9, yeValue)));
+                });
+
+                // 7. Store data
+                simulatedData = {
+                    x: simulationResult.x, // Should be list of lists from Flask
+                    y: simulationResult.y, // Should be list of lists from Flask
+                    ye: simulatedYE
+                };
+
+                console.log("Simulation complete via Flask.");
+                resultsDisplay.textContent = `Data simulated for ${simulatedData.x.length} dataset(s).`;
+                fitResultData = null;
+                updatePlots();
+
+            } catch (error) {
+                console.error(`Simulation failed: ${error.message}`);
+                resultsDisplay.textContent = `Simulation failed: ${error.message}`;
+                simulatedData = null;
+                updatePlots();
+            } finally {
+                fittingOverlay.style.display = 'none';
+            }
+        }
+
+        // *** NEW runFit function using Flask backend ***
+        async function runFit() {
+            if (!simulatedData || !simulatedData.x || simulatedData.x.length === 0) {
+                resultsDisplay.textContent = "Please simulate valid data first."; return;
+            }
+            console.log("Requesting fit from Flask backend...");
+            resultsDisplay.textContent = ""; // Clear previous logs
+            // Use logger defined elsewhere or define it here
+            const fitLogger = (message, level = 'info') => { /* ... logging implementation ... */ console.log(`[${level.toUpperCase()}] ${message}`); };
+            fitLogger("Requesting fit from backend...", 'info');
+            fitParamsBody.innerHTML = '<tr><td colspan="3" class="text-center"><i>Fitting...</i></td></tr>';
+            fittingOverlay.style.display = 'flex';
+            overlayText.textContent = "Fitting data...";
+            await new Promise(resolve => setTimeout(resolve, 50));
+    
+            let payload = {}; // Define payload outside try block
+    
+            try {
+                // 1. Gather all inputs
+                const gatheredInputs = gatherFitInputs(true); // Can throw error
+                const { initialParamsStructure, modelKeysStructure, fixMapStructure, linkMap, modelXRange } = gatheredInputs;
+    
+                if (initialParamsStructure.length !== simulatedData.x.length) {
+                    throw new Error(`Mismatch between defined datasets (${initialParamsStructure.length}) and simulated datasets (${simulatedData.x.length}). Please re-simulate.`);
+                }
+    
+                // 2. Gather Fit Options
+                let requestedCI = null;
+                const ciValueStr = ciLevelInput.value.trim();
+                if (ciValueStr !== "") { const ciVal = parseFloat(ciValueStr); if (!isNaN(ciVal) && ciVal > 0 && ciVal < 1) requestedCI = ciVal; }
+    
+                let requestedCovLambda = 1e-9;
+                const covLambdaStr = covLambdaInput.value.trim();
+                if (covLambdaStr !== "") { const covL = parseFloat(covLambdaStr); if (!isNaN(covL) && covL >= 0) requestedCovLambda = covL; }
+    
+                const useBootstrapFallback = bootstrapFallbackInput.checked;
+                let numBootstrapSamples = parseInt(bootstrapSamplesInput.value) || 200;
+                if (numBootstrapSamples < 10) numBootstrapSamples = 10;
+    
+                const calculateComponentModels = componentCurvesInput.checked;
+    
+                const fitOptions = {
+                    maxIterations: parseInt(document.getElementById('fit-max-iter').value) || 100,
+                    errorTolerance: parseFloat(document.getElementById('fit-tolerance').value) || 1e-6,
+                    gradientTolerance: parseFloat(document.getElementById('fit-tolerance').value) || 1e-6,
+                    fixMap: fixMapStructure,
+                    linkMap: linkMap,
+                    confidenceInterval: requestedCI,
+                    bootstrapFallback: useBootstrapFallback,
+                    numBootstrapSamples: numBootstrapSamples,
+                    calculateComponentModels: calculateComponentModels,
+                    calculateFittedModel: { numPoints: 100 },
+                    covarianceLambda: requestedCovLambda,
+                    model_x_range: modelXRange
+                };
+    
+                // 3. Prepare Payload
+                payload = { // Assign to payload defined outside
+                    data: simulatedData,
+                    model_keys: modelKeysStructure,
+                    initial_parameters: initialParamsStructure,
+                    options: fitOptions
+                };
+                console.log("Payload to /fit:", JSON.stringify(payload, null, 2)); // Log payload
+    
+                // 4. Call Flask Endpoint
+                const response = await fetch('/fit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                console.log("Fetch response status:", response.status); // Log status
+    
+                if (!response.ok) {
+                    const errorText = await response.text(); // Get raw text
+                    console.error("Fit request failed:", errorText);
+                    let errorDetail = `HTTP error ${response.status}`;
+                    try { // Try to parse as JSON, but use text if fails
+                        const errorData = JSON.parse(errorText);
+                        errorDetail = errorData.error || errorDetail;
+                    } catch (e) {
+                        errorDetail += ` - ${errorText.substring(0, 200)}`; // Include part of text response
+                    }
+                    throw new Error(errorDetail);
+                }
+    
+                fitResultData = await response.json(); // Store the result from Flask
+    
+                // 5. Process and Display Results
+                console.log("Fit Result from Flask:", fitResultData);
+                fitLogger("Fit complete. Processing results...", 'info');
+    
+                // ... (rest of result processing and plotting as before) ...
+                fitParamsBody.innerHTML = ''; // Clear previous params
+                if (fitResultData.error) {
+                    fitLogger(`Fit Failed (Backend): ${fitResultData.error}`, 'error');
+                    fitParamsBody.innerHTML = `<tr><td colspan="3" class="text-danger">Fit Failed: ${fitResultData.error}</td></tr>`;
+                } else if (fitResultData.p_active && fitResultData.p_active.length > 0) {
+                    fitResultData.p_active.forEach((pVal, idx) => {
+                        const label = fitResultData.activeParamLabels[idx] || `Active ${idx}`;
+                        const errorVal = fitResultData.parameterErrors ? fitResultData.parameterErrors[idx] : null; // Use null for NaN/None
+                        const row = fitParamsBody.insertRow();
+                        const errorDisplay = (errorVal === null || isNaN(errorVal)) ? 'N/A' : errorVal.toExponential(3);
+                        row.innerHTML = `<td>${label}</td><td>${pVal.toExponential(5)}</td><td>${errorDisplay}</td>`;
+                    });
+                } else if (fitResultData.converged) {
+                    fitParamsBody.innerHTML = `<tr><td colspan="3" class="text-center"><i>Converged, no active params/errors.</i></td></tr>`;
+                } else {
+                    fitParamsBody.innerHTML = `<tr><td colspan="3" class="text-center"><i>Fit did not converge or produce results.</i></td></tr>`;
+                }
+    
+                if (!fitResultData.error) {
+                    const statsHeader = `<hr style="margin-top: 10px; margin-bottom: 10px;"><strong>Fit Statistics Summary:</strong><br>`;
+                    let summaryHtml = `Converged: ${fitResultData.converged}<br>`;
+                    summaryHtml += `Iterations: ${fitResultData.iterations}<br>`;
+                    summaryHtml += `ChiSquared: ${fitResultData.chiSquared?.toExponential(5) ?? 'N/A'}<br>`;
+                    summaryHtml += `Reduced ChiSquared: ${fitResultData.reducedChiSquared?.toFixed(5) ?? 'N/A'}<br>`;
+                    summaryHtml += `AIC: ${fitResultData.aic?.toFixed(3) ?? 'N/A'}, AICc: ${fitResultData.aicc?.toFixed(3) ?? 'N/A'}, BIC: ${fitResultData.bic?.toFixed(3) ?? 'N/A'}<br>`;
+                    const bootstrapStatus = fitResultData.bootstrapUsed ? 'Yes' : 'No'; // Assuming Python adds this flag
+                    summaryHtml += `Bootstrap Fallback Used: ${bootstrapStatus}<br>`;
+                    resultsDisplay.innerHTML += statsHeader + summaryHtml;
+                    resultsDisplay.scrollTop = resultsDisplay.scrollHeight;
+                }
+                updatePlots(); // Update plots with fit data
+    
+    
+            } catch (error) {
+                console.error("Fit Execution Error:", error);
+                fitLogger(`Fit Execution Error: ${error.message}`, 'error');
+                fitParamsBody.innerHTML = `<tr><td colspan="3" class="text-danger">Fit Failed: ${error.message}</td></tr>`;
+                fitResultData = null;
+                updatePlots();
+            } finally {
+                fittingOverlay.style.display = 'none';
+            }
+        }
+
+        // --- updatePlots Function (Modified to handle data format from Flask) ---
+        function updatePlots() {
+            const colors = ['#0d6efd', '#dc3545', '#198754', '#ffc107', '#6f42c1', '#fd7e14'];
+            const dashStyles = [[5, 5], [10, 3], [2, 2], [8, 2, 2, 2], [6, 2], [1, 3]];
+
+            const dataFitCtx = dataFitCanvas.getContext('2d');
+            const residualsCtx = residualsCanvas.getContext('2d');
+            const componentFitCtx = componentFitCanvas.getContext('2d');
+
+            if (dataFitChart) dataFitChart.destroy();
+            if (residualsChart) residualsChart.destroy();
+            if (componentFitChart) componentFitChart.destroy();
+            dataFitChart = residualsChart = componentFitChart = null;
+
+            if (!dataFitCtx || !residualsCtx || !componentFitCtx) return;
+
+            try {
+                const dataFitDatasets = [];
+                const residualDatasets = [];
+                const componentFitDatasets = [];
+                let yMinOverall = Infinity, yMaxOverall = -Infinity;
+
+                // 1. Process Simulated Data (now list of lists)
+                if (simulatedData && simulatedData.x && simulatedData.x.length > 0) {
+                    simulatedData.x.forEach((xData, dsIndex) => {
+                        if (!simulatedData.y[dsIndex] || xData.length !== simulatedData.y[dsIndex].length) return;
+                        const yData = simulatedData.y[dsIndex];
+                        const scatterData = xData.map((x, i) => {
+                            const y = yData[i];
+                            if (isFinite(y)) { yMinOverall = Math.min(yMinOverall, y); yMaxOverall = Math.max(yMaxOverall, y); }
+                            return { x, y: isFinite(y) ? y : null }; // Handle potential NaN/Inf from sim
+                        });
+                        const datasetColor = colors[dsIndex % colors.length];
+                        const scatterConfig = { label: `Data ${dsIndex}`, data: scatterData, borderColor: datasetColor, backgroundColor: datasetColor + '80', type: 'scatter', pointRadius: 4, showLine: false, order: 0 };
+                        dataFitDatasets.push({ ...scatterConfig });
+                        componentFitDatasets.push({ ...scatterConfig });
+                    });
+                }
+
+                // 2. Process Fit Results (from Flask)
+                if (fitResultData && !fitResultData.error) {
+                    // DEBUGGING
+                    console.log("Plotting fit results:", fitResultData); // Log result again
+
+                    // a) Combined Fit Curve and CI Bands
+                    if (fitResultData.fittedModelCurves) {
+                        fitResultData.fittedModelCurves.forEach((curve, dsIndex) => {
+                            if (!curve || !curve.x || !curve.y || curve.x.length !== curve.y.length) return;
+                            const fitColor = colors[dsIndex % colors.length];
+
+                            // --- Log X Range for Fit Line ---
+                            console.log(`Plotting Fit DS ${dsIndex}: X range [${curve.x[0]}, ${curve.x[curve.x.length-1]}], Points: ${curve.x.length}`);
+                            // --- END LOGGING ---
+
+                            dataFitDatasets.push({
+                                label: `Fit ${dsIndex}`,
+                                data: curve.x.map((x, i) => {
+                                    const y = curve.y[i]; // Already list from Flask
+                                    if (y !== null && isFinite(y)) { yMinOverall = Math.min(yMinOverall, y); yMaxOverall = Math.max(yMaxOverall, y); }
+                                    return { x, y: (y !== null && isFinite(y)) ? y : null };
+                                }),
+                                borderColor: fitColor, borderWidth: 2, type: 'line', pointRadius: 0, tension: 0.1, fill: false, order: dsIndex * 10 + 1
+                            });
+
+                            // CI Bands
+                            const ci_l = fitResultData.ci_lower?.[dsIndex];
+                            const ci_u = fitResultData.ci_upper?.[dsIndex];
+                            if (ci_l && ci_u && ci_l.x && ci_u.x && ci_l.x.length === curve.x.length && ci_u.x.length === curve.x.length) {
+                                
+                                // --- Log X Range for CI ---
+                                console.log(`Plotting CI DS ${dsIndex}: X range [${ci_l.x[0]}, ${ci_l.x[ci_l.x.length-1]}], Points: ${ci_l.x.length}`);
+                                // ---
+                                
+                                const bandColor = fitColor + '33';
+                                const lowerBandData = ci_l.x.map((x, i) => {
+                                    const y = ci_l.y[i];
+                                    if (y !== null && isFinite(y)) { yMinOverall = Math.min(yMinOverall, y); yMaxOverall = Math.max(yMaxOverall, y); }
+                                    return { x, y: (y !== null && isFinite(y)) ? y : null };
+                                });
+                                const upperBandData = ci_u.x.map((x, i) => {
+                                    const y = ci_u.y[i];
+                                    if (y !== null && isFinite(y)) { yMinOverall = Math.min(yMinOverall, y); yMaxOverall = Math.max(yMaxOverall, y); }
+                                    return { x, y: (y !== null && isFinite(y)) ? y : null };
+                                });
+                                let lowerBandDatasetIndex = -1;
+                                if (lowerBandData.some(p => p.y !== null)) {
+                                    lowerBandDatasetIndex = dataFitDatasets.length;
+                                    dataFitDatasets.push({ label: `_hidden_lower_${dsIndex}`, data: lowerBandData, borderColor: 'transparent', borderWidth: 0.5, pointRadius: 0, fill: false, type: 'line', spanGaps: false, order: dsIndex * 10 + 2 });
+                                }
+                                if (upperBandData.some(p => p.y !== null) && lowerBandDatasetIndex !== -1) {
+                                    dataFitDatasets.push({ label: `Fit ${dsIndex} CI`, data: upperBandData, borderColor: 'transparent', borderWidth: 0.5, backgroundColor: bandColor, pointRadius: 0, fill: { target: lowerBandDatasetIndex }, type: 'line', spanGaps: false, order: dsIndex * 10 + 3 });
+                                }
+                            }
+                        });
+                    }
+
+                    // b) Component Fit Curves
+                    if (fitResultData.fittedModelComponentCurves) {
+                        console.log("Processing fittedModelComponentCurves:", JSON.stringify(fitResultData.fittedModelComponentCurves, null, 2)); // Log structure
+                        fitResultData.fittedModelComponentCurves.forEach((datasetComponents, dsIndex) => {
+                            console.log(`Plotting Components DS ${dsIndex} - Data:`, datasetComponents); // Log dataset components
+                            if (!Array.isArray(datasetComponents)) {
+                                console.log(`DS ${dsIndex} - Components not an array, skipping.`);
+                                return; // Skip this dataset
+                            }
+                            const baseColor = colors[dsIndex % colors.length];
+                            datasetComponents.forEach((componentCurve, modelIdx) => {
+                                console.log(`Plotting Comp ${dsIndex}-${modelIdx} - Curve data:`, componentCurve); // Log individual curve
+                                if (!componentCurve || !componentCurve.x || !componentCurve.y || !Array.isArray(componentCurve.x) || !Array.isArray(componentCurve.y) || componentCurve.x.length !== componentCurve.y.length) {
+                                    console.log(`DS ${dsIndex} - Skipping invalid component curve ${modelIdx}.`);
+                                    return; // Skip this component
+                                }
+                                if (componentCurve.x.length === 0) {
+                                    console.log(`DS ${dsIndex} - Skipping empty component curve ${modelIdx}.`);
+                                    return; // Skip empty curves
+                                }
+                                console.log(`DS ${dsIndex} - Adding component curve ${modelIdx} to dataset list.`);
+                                componentFitDatasets.push({ // Add to the list for the chart
+                                    label: `Comp ${dsIndex}-${modelIdx}`,
+                                    data: componentCurve.x.map((x, i) => {
+                                        const y = componentCurve.y[i];
+                                        // Update overall range if needed (optional, could skew main plot)
+                                        // if (y !== null && isFinite(y)) { yMinOverall = Math.min(yMinOverall, y); yMaxOverall = Math.max(yMaxOverall, y); }
+                                        return { x, y: (y !== null && isFinite(y)) ? y : null };
+                                    }),
+                                    borderColor: baseColor, borderDash: dashStyles[modelIdx % dashStyles.length],
+                                    borderWidth: 1.5, type: 'line', pointRadius: 0, tension: 0.1, fill: false, order: dsIndex * 10 + modelIdx + 100 // Increase order to plot above data/fit
+                                });
+                            });
+                        });
+                    } else {
+                        console.log("No fittedModelComponentCurves found in results.");
+                    }
+
+                    // c) Residuals
+                    if (fitResultData.residualsPerSeries) {
+                        fitResultData.residualsPerSeries.forEach((residuals, dsIndex) => {
+                            if (residuals && simulatedData?.x?.[dsIndex] && residuals.length === simulatedData.x[dsIndex].length) {
+                                residualDatasets.push({
+                                    label: `Residuals ${dsIndex}`,
+                                    data: simulatedData.x[dsIndex].map((x, i) => ({ x, y: residuals[i] ?? null })), // Use null for NaN
+                                    borderColor: colors[dsIndex % colors.length], backgroundColor: colors[dsIndex % colors.length] + '80',
+                                    type: 'scatter', pointRadius: 3, showLine: false
+                                });
+                            }
+                        });
+                    }
+                }
+
+                // --- Create Charts ---
+                const yAxisMin = isFinite(yMinOverall) ? yMinOverall - Math.max(1, Math.abs(yMaxOverall - yMinOverall)) * 0.1 : undefined;
+                const yAxisMax = isFinite(yMaxOverall) ? yMaxOverall + Math.max(1, Math.abs(yMaxOverall - yMinOverall)) * 0.1 : undefined;
+
+                const commonChartOptions = {
+                    responsive: true, maintainAspectRatio: false,
+                    scales: { x: { type: 'linear', position: 'bottom', title: { display: true, text: 'X' } } },
+                    plugins: { legend: { position: 'top', labels: { filter: item => item.text ? !item.text.startsWith('_hidden_') : true } } }
+                };
+
+                if (dataFitDatasets.length > 0) {
+                    dataFitChart = new Chart(dataFitCtx, {
+                        type: 'scatter', data: { datasets: dataFitDatasets },
+                        options: { ...commonChartOptions, scales: { ...commonChartOptions.scales, y: { title: { display: true, text: 'Y' }, min: yAxisMin, max: yAxisMax } }, plugins: { ...commonChartOptions.plugins, title: { display: true, text: 'Simulated Data, Combined Fit, and CI Bands' } } }
+                    });
+                } else { dataFitCtx.clearRect(0, 0, dataFitCanvas.width, dataFitCanvas.height); dataFitCtx.textAlign = 'center'; dataFitCtx.fillText('No data/fit to display', dataFitCanvas.width / 2, dataFitCanvas.height / 2); }
+
+                // --- Create Component Chart ---
+                console.log("Final datasets array for Component Chart:", componentFitDatasets); // Log before creating chart
+                if (componentFitDatasets.some(ds => ds.data.length > 0)) {
+                    // ... (calculate compYAxisMin/Max if needed) ...
+                    componentFitChart = new Chart(componentFitCtx, {
+                        type: 'scatter', // Use scatter to handle potential gaps if spanGaps isn't working well
+                        data: { datasets: componentFitDatasets },
+                        options: { /* ... common options ... */ }
+                    });
+                    console.log("Component chart created.");
+                } else {
+                    console.log("No valid component datasets to plot.");
+                    componentFitCtx.clearRect(0, 0, componentFitCanvas.width, componentFitCanvas.height); componentFitCtx.textAlign = 'center'; componentFitCtx.fillText('No component data to display', componentFitCanvas.width / 2, componentFitCanvas.height / 2);
+                }
+
+                if (residualDatasets.length > 0) {
+                    residualsChart = new Chart(residualsCtx, {
+                        type: 'scatter', data: { datasets: residualDatasets },
+                        options: { ...commonChartOptions, scales: { ...commonChartOptions.scales, y: { title: { display: true, text: 'Residual (y-fit)/ye' } } }, plugins: { ...commonChartOptions.plugins, title: { display: true, text: 'Fit Residuals' } } }
+                    });
+                } else { residualsCtx.clearRect(0, 0, residualsCanvas.width, residualsCanvas.height); residualsCtx.textAlign = 'center'; residualsCtx.fillText('No residuals to display', residualsCanvas.width / 2, residualsCanvas.height / 2); }
+
+            } catch (error) {
+                console.error("Plotting Error:", error);
+                resultsDisplay.textContent += `\nPlotting Error: ${error.message}`;
+            }
+        } // End updatePlots
+
+    // --- Initial Setup ---
+    document.addEventListener('DOMContentLoaded', () => {
+        infoModal = new bootstrap.Modal(document.getElementById('infoModal'));
+        addDatasetBlock(0); // Add first dataset block on load
+        // Set default model AFTER block is added
+        const initialSelect = datasetsContainer.querySelector('#dataset-0 .model-select');
+        if (initialSelect) initialSelect.value = 'gaussian';
+        // Call generateParameterUI ONCE after initial setup
+        generateParameterUI();
+        // Add event listeners
+        addDatasetBtn.addEventListener('click', () => { let nextIndex = 0; const existingIndices = new Set( Array.from(datasetsContainer.querySelectorAll('.dataset-block')).map(b => parseInt(b.id.split('-')[1])) ); while (existingIndices.has(nextIndex)) nextIndex++; if (nextIndex < 20) addDatasetBlock(nextIndex); else alert("Max datasets (20) reached."); });
+        simulateBtn.addEventListener('click', simulateData);
+        fitBtn.addEventListener('click', runFit); // Ensure this listener is attached
+        infoBtn.addEventListener('click', () => { infoModal.show(); });
+        updatePlots(); // Initialize empty plots
+    });
+</script>
+</body>
+</html>
